@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1">
+    <title>Minecraft Kloni - Gerçekçi Dünya</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: Arial, sans-serif; }
+        canvas { display: block; }
+        #startScreen, #lobbyScreen, #settingsScreen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-size: cover; background-position: center;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            color: white; z-index: 300; text-shadow: 0 2px 15px #000;
+        }
+        button { margin: 12px; padding: 15px 45px; font-size: 21px; background: #4CAF50; color: white; border: none; border-radius: 8px; cursor: pointer; }
+        button:hover { background: #45a049; }
+        #inventory { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: none; gap: 10px; z-index: 150; }
+        .slot { width: 64px; height: 64px; background: rgba(0,0,0,0.75); border: 3px solid #666; border-radius: 6px; color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; }
+        .slot.selected { border-color: #ffeb3b; box-shadow: 0 0 15px #ffeb3b; }
+        #info { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.6); padding: 8px 14px; border-radius: 6px; z-index: 100; display: none; }
+    </style>
+</head>
+<body>
+
+    <!-- Karşılama -->
+    <div id="startScreen" style="background-image: url('karşılama.webp');">
+        <h1 style="font-size: 65px; margin-bottom: 30px;">Minecraft Kloni</h1>
+        <button onclick="startGame()">Oyuna Başla</button>
+        <button onclick="showSettings()">Ayarlar</button>
+    </div>
+
+    <!-- Lobi -->
+    <div id="lobbyScreen" style="display:none; background-image: url('lobi.webp');">
+        <h1>Lobi</h1>
+        <img src="karakter.webp" style="width:190px; border:6px solid #fff; border-radius:12px; margin:25px;" alt="Karakter">
+        <button onclick="enterGame()">Oyuna Gir</button>
+        <button onclick="showSettings()">Ayarlar</button>
+        <button onclick="backToStart()">Geri</button>
+    </div>
+
+    <!-- Ayarlar -->
+    <div id="settingsScreen" style="display:none; background:rgba(0,0,0,0.9);">
+        <h1>Ayarlar</h1>
+        <p>Müzik: <input type="range" id="musicVolume" min="0" max="100" value="60"></p>
+        <button onclick="saveSettings()">Kaydet ve Kapat</button>
+        <button onclick="hideSettings()">İptal</button>
+    </div>
+
+    <div id="info">1: Taş 2: Toprak 3: Tahta<br>WASD + Space | Sol Tık: Kır | Sağ Tık: Koy</div>
+
+    <div id="inventory">
+        <div class="slot selected" data-type="stone">Taş</div>
+        <div class="slot" data-type="dirt">Toprak</div>
+        <div class="slot" data-type="wood">Tahta</div>
+    </div>
+
+    <audio id="bgMusic" loop>
+        <source src="background.mp3" type="audio/mpeg">
+    </audio>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/controls/PointerLockControls.min.js"></script>
+
+    <script>
+        let camera, scene, renderer, controls;
+        let selectedBlockType = "stone";
+        let blocks = [];
+        let handMesh;
+        let particles;
+        let waterMesh;
+        let bgMusic;
+
+        function showScreen(id) {
+            document.getElementById('startScreen').style.display = 'none';
+            document.getElementById('lobbyScreen').style.display = 'none';
+            document.getElementById('settingsScreen').style.display = 'none';
+            if (id) document.getElementById(id).style.display = 'flex';
+        }
+
+        function startGame() { showScreen('lobbyScreen'); }
+        function backToStart() { showScreen('startScreen'); }
+        function showSettings() { showScreen('settingsScreen'); }
+        function hideSettings() { showScreen('lobbyScreen'); }
+
+        function saveSettings() {
+            const vol = document.getElementById('musicVolume').value / 100;
+            if (bgMusic) bgMusic.volume = vol;
+            hideSettings();
+        }
+
+        function enterGame() {
+            showScreen(null);
+            document.getElementById('info').style.display = 'block';
+            document.getElementById('inventory').style.display = 'flex';
+            initWorld();
+        }
+
+        function initWorld() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.Fog(0x88bbff, 50, 350);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(10, 35, 40);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // Işıklar
+            scene.add(new THREE.AmbientLight(0x99ccff, 0.7));
+            const sunLight = new THREE.DirectionalLight(0xffeecc, 1.25);
+            sunLight.position.set(100, 150, -60);
+            sunLight.castShadow = true;
+            scene.add(sunLight);
+
+            // Güneş
+            const sunGeo = new THREE.SphereGeometry(14, 32, 32);
+            const sunMat = new THREE.MeshBasicMaterial({
+                map: new THREE.TextureLoader().load('güneş.webp'),
+                side: THREE.BackSide
+            });
+            const sun = new THREE.Mesh(sunGeo, sunMat);
+            sun.position.set(140, 160, -100);
+            scene.add(sun);
+
+            // Gerçekçi Arazi (Dağlar, Vadiler)
+            const size = 280;
+            const segments = 140;
+            const terrainGeo = new THREE.PlaneGeometry(size, size, segments, segments);
+            const vertices = terrainGeo.attributes.position.array;
+
+            for (let i = 0; i < vertices.length; i += 3) {
+                const x = vertices[i];
+                const z = vertices[i + 2];
+                let h = 0;
+                h += Math.sin(x * 0.018) * 6 + Math.cos(z * 0.022) * 7;
+                h += Math.sin(x * 0.008 + z * 0.009) * 18;   // büyük dağlar
+                h += Math.sin(x * 0.035) * 3.5;
+                h = Math.max(-8, h); // vadiler için negatif
+                vertices[i + 1] = h;
+            }
+            terrainGeo.computeVertexNormals();
+
+            const terrainMat = new THREE.MeshLambertMaterial({ 
+                vertexColors: true,
+                flatShading: false 
+            });
+            const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+            terrain.rotation.x = -Math.PI / 2;
+            terrain.receiveShadow = true;
+            terrain.castShadow = true;
+            scene.add(terrain);
+
+            // Vertex renkleri (biyomlar)
+            const colors = new Float32Array(vertices.length);
+            for (let i = 0; i < vertices.length; i += 3) {
+                const y = vertices[i + 1];
+                let col;
+                if (y < 2) col = [0.1, 0.4, 0.8];      // deniz / su
+                else if (y < 6) col = [0.85, 0.75, 0.45]; // kumsal
+                else if (y < 15) col = [0.15, 0.55, 0.1]; // çimen
+                else if (y < 28) col = [0.45, 0.45, 0.45]; // kayalık
+                else col = [0.95, 0.98, 1.0];             // kar
+                colors[i] = col[0]; colors[i+1] = col[1]; colors[i+2] = col[2];
+            }
+            terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            // Su (deniz + göller)
+            const waterGeo = new THREE.PlaneGeometry(size * 1.1, size * 1.1);
+            const waterMat = new THREE.MeshLambertMaterial({
+                color: 0x2288ff,
+                transparent: true,
+                opacity: 0.75,
+                shininess: 100
+            });
+            waterMesh = new THREE.Mesh(waterGeo, waterMat);
+            waterMesh.rotation.x = -Math.PI / 2;
+            waterMesh.position.y = 1.5;
+            scene.add(waterMesh);
+
+            // Çiçekler
+            for (let i = 0; i < 120; i++) {
+                const flower = createFlower();
+                const rx = (Math.random() - 0.5) * size * 0.9;
+                const rz = (Math.random() - 0.5) * size * 0.9;
+                flower.position.set(rx, 4, rz); // yükseklik terrain'e göre ayarlanabilir
+                scene.add(flower);
+            }
+
+            // Partiküller (uçuşan yapraklar / toz)
+            createParticles();
+
+            // El
+            createHand();
+
+            // Müzik
+            bgMusic = document.getElementById('bgMusic');
+            bgMusic.volume = 0.6;
+            bgMusic.play().catch(() => {});
+
+            // Kontroller
+            controls = new THREE.PointerLockControls(camera, renderer.domElement);
+            renderer.domElement.addEventListener('click', () => controls.lock());
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('mousedown', onMouse);
+            document.addEventListener('contextmenu', e => e.preventDefault());
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            animate();
+        }
+
+        function createFlower() {
+            const group = new THREE.Group();
+            const stem = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.06, 0.08, 1.4, 8),
+                new THREE.MeshLambertMaterial({ color: 0x228B22 })
+            );
+            stem.position.y = 0.7;
+            group.add(stem);
+
+            const petalMat = new THREE.MeshLambertMaterial({ 
+                color: Math.random() > 0.5 ? 0xFF1493 : 0xFFAA00,
+                side: THREE.DoubleSide 
+            });
+            const petal = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), petalMat);
+            petal.position.y = 1.6;
+            group.add(petal);
+            const petal2 = petal.clone();
+            petal2.rotation.y = Math.PI / 2;
+            group.add(petal2);
+            return group;
+        }
+
+        function createParticles() {
+            const particleCount = 280;
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(particleCount * 3);
+            const colors = new Float32Array(particleCount * 3);
+
+            for (let i = 0; i < particleCount * 3; i += 3) {
+                positions[i]     = (Math.random() - 0.5) * 220;
+                positions[i + 1] = Math.random() * 60 + 10;
+                positions[i + 2] = (Math.random() - 0.5) * 220;
+
+                colors[i] = 0.8; colors[i+1] = 0.9; colors[i+2] = 0.6; // yeşilimsi yaprak
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: 0.6,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.7
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+        }
+
+        function createHand() {
+            const geo = new THREE.BoxGeometry(0.95, 0.75, 1.7);
+            const mat = new THREE.MeshLambertMaterial({
+                map: new THREE.TextureLoader().load('el.webp'),
+                color: 0xffffff
+            });
+            handMesh = new THREE.Mesh(geo, mat);
+            scene.add(handMesh);
+        }
+
+        function onMouse(e) {
+            if (!controls || !controls.isLocked) return;
+            if (e.button === 0) console.log("Blok kırıldı");
+            if (e.button === 2) console.log("Blok koyuldu");
+        }
+
+        function onKeyDown(e) {
+            if (e.key === '1') selectedBlockType = "stone";
+            if (e.key === '2') selectedBlockType = "dirt";
+            if (e.key === '3') selectedBlockType = "wood";
+            document.querySelectorAll('.slot').forEach(s => s.classList.toggle('selected', s.dataset.type === selectedBlockType));
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Su hafif dalga efekti
+            if (waterMesh) waterMesh.position.y = 1.5 + Math.sin(Date.now() * 0.001) * 0.15;
+
+            // Partiküller hafif hareket (rüzgar)
+            if (particles) {
+                const pos = particles.geometry.attributes.position.array;
+                for (let i = 1; i < pos.length; i += 3) {
+                    pos[i] += 0.008; // yavaş yukarı
+                    if (pos[i] > 70) pos[i] = 5;
+                }
+                particles.geometry.attributes.position.needsUpdate = true;
+            }
+
+            // El kameraya bağlı
+            if (handMesh) {
+                handMesh.position.copy(camera.position);
+                handMesh.rotation.copy(camera.rotation);
+                handMesh.translateX(0.7);
+                handMesh.translateY(-0.9);
+                handMesh.translateZ(-1.65);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Başlangıç
+        window.onload = () => showScreen('startScreen');
+    </script>
+</body>
+  </html>
